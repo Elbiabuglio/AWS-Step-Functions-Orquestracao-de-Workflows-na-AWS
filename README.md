@@ -51,6 +51,26 @@ O **AWS Step Functions** é um serviço de orquestração serverless que permite
 - **Error Handling** - Tratamento robusto de erros e retry
 - **Monitoring** - Monitoramento detalhado de execuções
 
+## 🚀 Funcionalidades do Repositório
+
+### 📖 **Documentação Completa**
+Guia abrangente sobre AWS Step Functions com conceitos fundamentais, tipos de workflows e melhores práticas.
+
+### 💼 **Exemplos Práticos Reais**
+Casos de uso implementados incluindo processamento de arquivos, workflows paralelos e tratamento de erros.
+
+### 🎯 **Templates Reutilizáveis**
+Modelos prontos em JSON para diferentes cenários de uso com CloudFormation e máquinas de estado.
+
+### 🔧 **Integrações Demonstradas**
+Exemplos práticos de integração com Lambda, DynamoDB, SNS, SQS e outros serviços AWS.
+
+### 📊 **Monitoramento e Observabilidade**
+Guias para implementar CloudWatch Metrics, X-Ray Tracing e estratégias de debugging.
+
+### 💡 **Boas Práticas Aplicadas**
+Recomendações de design, segurança, performance e otimização de custos baseadas em experiência prática.
+
 ## 📚 Conceitos Fundamentais
 
 ### Estados (States)
