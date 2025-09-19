@@ -1,0 +1,63 @@
+v1
+{
+  "Comment": "E-commerce Order Processing Workflow - Exemplo Completo",
+  "StartAt": "ValidateOrder",
+  "States": {
+    "ValidateOrder": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ValidateOrder",
+      "Parameters": {
+        "order.$": "$.order",
+        "customer.$": "$.customer",
+        "timestamp.$": "$$.State.EnteredTime"
+      },
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["ValidationError"],
+          "Next": "OrderValidationFailed",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "SystemError",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "CheckInventory"
+    },
+
+    "CheckInventory": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "Inventory",
+        "Key": {
+          "ProductId": {
+            "S.$": "$.order.productId"
+          }
+        }
+      },
+      "ResultPath": "$.inventory",
+      "Next": "HasInventory?"
+    },
+
+    "HasInventory?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.inventory.Item",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.inventory.Item

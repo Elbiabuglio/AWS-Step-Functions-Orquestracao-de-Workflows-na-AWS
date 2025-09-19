@@ -1,0 +1,458 @@
+# Conceitos Fundamentais - AWS Step Functions
+
+## 🧠 Introdução aos Conceitos Core
+
+### O que são State Machines (Máquinas de Estado)?
+
+Uma **máquina de estado** é um modelo computacional que define um sistema através de:
+- **Estados** finitos e bem definidos
+- **Transições** entre estados baseadas em eventos ou condições
+- **Dados** que fluem através dos estados
+
+### Amazon States Language (ASL)
+
+O ASL é uma linguagem JSON declarativa usada para definir máquinas de estado. Elementos principais:
+
+```json
+{
+  "Comment": "Descrição opcional da máquina de estado",
+  "StartAt": "PrimeiroEstado",
+  "States": {
+    "PrimeiroEstado": {
+      "Type": "TipoDoEstado",
+      // Configurações específicas do estado
+    }
+  }
+}
+```
+
+## 📋 Tipos de Estados Detalhados
+
+### 1. Task State
+Executa uma unidade de trabalho específica.
+
+```json
+{
+  "ProcessOrder": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessOrder",
+    "TimeoutSeconds": 300,
+    "HeartbeatSeconds": 60,
+    "Next": "CheckResult",
+    "Retry": [
+      {
+        "ErrorEquals": ["Lambda.ServiceException"],
+        "IntervalSeconds": 2,
+        "MaxAttempts": 6,
+        "BackoffRate": 2.0
+      }
+    ],
+    "Catch": [
+      {
+        "ErrorEquals": ["States.TaskFailed"],
+        "Next": "HandleError",
+        "ResultPath": "$.error"
+      }
+    ]
+  }
+}
+```
+
+**Parâmetros importantes:**
+- `Resource`: ARN do recurso a ser executado
+- `TimeoutSeconds`: Timeout total da tarefa
+- `HeartbeatSeconds`: Intervalo máximo entre heartbeats
+- `Retry`: Configuração de tentativas automáticas
+- `Catch`: Tratamento de erros
+
+### 2. Choice State
+Implementa lógica condicional (if/else).
+
+```json
+{
+  "CheckAge": {
+    "Type": "Choice",
+    "Choices": [
+      {
+        "Variable": "$.age",
+        "NumericGreaterThanEquals": 18,
+        "Next": "AdultProcess"
+      },
+      {
+        "Variable": "$.age",
+        "NumericLessThan": 18,
+        "Next": "MinorProcess"
+      }
+    ],
+    "Default": "ErrorState"
+  }
+}
+```
+
+**Operadores de comparação:**
+- `StringEquals`, `StringLessThan`, `StringGreaterThan`
+- `NumericEquals`, `NumericLessThan`, `NumericGreaterThan`
+- `BooleanEquals`
+- `TimestampEquals`, `TimestampLessThan`, `TimestampGreaterThan`
+- `IsNull`, `IsPresent`, `IsNumeric`, `IsString`, `IsBoolean`, `IsTimestamp`
+
+### 3. Wait State
+Pausa a execução por tempo determinado.
+
+```json
+{
+  "WaitForResponse": {
+    "Type": "Wait",
+    "Seconds": 10,
+    "Next": "CheckResponse"
+  },
+  "WaitUntilTimestamp": {
+    "Type": "Wait",
+    "Timestamp": "2024-12-25T00:00:00Z",
+    "Next": "ChristmasProcess"
+  },
+  "WaitFromInput": {
+    "Type": "Wait",
+    "SecondsPath": "$.waitTime",
+    "Next": "ContinueProcess"
+  }
+}
+```
+
+### 4. Parallel State
+Executa branches paralelos.
+
+```json
+{
+  "ProcessInParallel": {
+    "Type": "Parallel",
+    "Branches": [
+      {
+        "StartAt": "ProcessImages",
+        "States": {
+          "ProcessImages": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessImages",
+            "End": true
+          }
+        }
+      },
+      {
+        "StartAt": "ProcessText",
+        "States": {
+          "ProcessText": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessText",
+            "End": true
+          }
+        }
+      }
+    ],
+    "Next": "CombineResults"
+  }
+}
+```
+
+### 5. Map State
+Itera sobre uma coleção de itens.
+
+```json
+{
+  "ProcessItems": {
+    "Type": "Map",
+    "ItemsPath": "$.items",
+    "MaxConcurrency": 10,
+    "Iterator": {
+      "StartAt": "ProcessSingleItem",
+      "States": {
+        "ProcessSingleItem": {
+          "Type": "Task",
+          "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessItem",
+          "End": true
+        }
+      }
+    },
+    "Next": "AllItemsProcessed"
+  }
+}
+```
+
+### 6. Pass State
+Passa ou transforma dados sem executar trabalho.
+
+```json
+{
+  "SetDefaults": {
+    "Type": "Pass",
+    "Parameters": {
+      "status": "processing",
+      "timestamp.$": "$$.State.EnteredTime",
+      "originalInput.$": "$"
+    },
+    "Next": "ProcessData"
+  }
+}
+```
+
+### 7. Fail State
+Termina execução com erro.
+
+```json
+{
+  "ValidationError": {
+    "Type": "Fail",
+    "Error": "ValidationError",
+    "Cause": "Input validation failed"
+  }
+}
+```
+
+### 8. Succeed State
+Termina execução com sucesso.
+
+```json
+{
+  "Success": {
+    "Type": "Succeed"
+  }
+}
+```
+
+## 🔄 Manipulação de Dados
+
+### InputPath, OutputPath e ResultPath
+
+```json
+{
+  "ProcessData": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:Process",
+    "InputPath": "$.data",           // Passa apenas $.data como input
+    "OutputPath": "$.result",        // Retorna apenas $.result como output
+    "ResultPath": "$.processResult", // Adiciona resultado em $.processResult
+    "Next": "NextState"
+  }
+}
+```
+
+### Parameters e ResultPath
+```json
+{
+  "EnhanceInput": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:Enhance",
+    "Parameters": {
+      "input.$": "$",
+      "config": {
+        "mode": "enhanced",
+        "timestamp.$": "$$.State.EnteredTime"
+      }
+    },
+    "ResultPath": "$.enhancement",
+    "Next": "UseEnhancedData"
+  }
+}
+```
+
+## 🔍 Context Object
+Informações sobre a execução atual disponíveis via `$$`.
+
+```json
+{
+  "LogExecution": {
+    "Type": "Pass",
+    "Parameters": {
+      "executionName.$": "$$.Execution.Name",
+      "stateMachineName.$": "$$.StateMachine.Name",
+      "executionId.$": "$$.Execution.Id",
+      "stateEnteredTime.$": "$$.State.EnteredTime",
+      "stateName.$": "$$.State.Name"
+    },
+    "Next": "ContinueWorkflow"
+  }
+}
+```
+
+## ⚠️ Error Handling
+
+### Retry Configuration
+```json
+{
+  "Retry": [
+    {
+      "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+      "IntervalSeconds": 2,
+      "MaxAttempts": 6,
+      "BackoffRate": 2.0
+    },
+    {
+      "ErrorEquals": ["States.TaskFailed"],
+      "IntervalSeconds": 1,
+      "MaxAttempts": 3
+    }
+  ]
+}
+```
+
+### Catch Configuration
+```json
+{
+  "Catch": [
+    {
+      "ErrorEquals": ["CustomError.ValidationFailed"],
+      "Next": "HandleValidationError",
+      "ResultPath": "$.error"
+    },
+    {
+      "ErrorEquals": ["States.ALL"],
+      "Next": "HandleGenericError",
+      "ResultPath": "$.error"
+    }
+  ]
+}
+```
+
+### Predefined Error Codes
+- `States.ALL` - Captura todos os erros
+- `States.TaskFailed` - Falha na execução da tarefa
+- `States.Timeout` - Timeout da tarefa
+- `States.ExecutionLimitExceeded` - Limite de execução excedido
+- `States.HeartbeatTimeout` - Timeout de heartbeat
+
+## 🎯 Padrões Comuns
+
+### 1. Try-Catch Pattern
+```json
+{
+  "TryOperation": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:RiskyOperation",
+    "Catch": [
+      {
+        "ErrorEquals": ["States.ALL"],
+        "Next": "HandleError"
+      }
+    ],
+    "Next": "Success"
+  },
+  "HandleError": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ErrorHandler",
+    "End": true
+  },
+  "Success": {
+    "Type": "Succeed"
+  }
+}
+```
+
+### 2. Saga Pattern (Compensating Actions)
+```json
+{
+  "ProcessPayment": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessPayment",
+    "Catch": [
+      {
+        "ErrorEquals": ["PaymentError"],
+        "Next": "CompensatePayment"
+      }
+    ],
+    "Next": "UpdateInventory"
+  },
+  "CompensatePayment": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:RefundPayment",
+    "End": true
+  }
+}
+```
+
+### 3. Circuit Breaker Pattern
+```json
+{
+  "CheckCircuitBreaker": {
+    "Type": "Choice",
+    "Choices": [
+      {
+        "Variable": "$.circuitBreakerOpen",
+        "BooleanEquals": true,
+        "Next": "CircuitBreakerOpen"
+      }
+    ],
+    "Default": "CallService"
+  },
+  "CallService": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:CallExternalService",
+    "Catch": [
+      {
+        "ErrorEquals": ["ServiceUnavailable"],
+        "Next": "OpenCircuitBreaker"
+      }
+    ],
+    "Next": "Success"
+  }
+}
+```
+
+## 📊 Limites e Considerações
+
+### Standard Workflows
+- **Payload máximo**: 256 KB
+- **Execução máxima**: 1 ano
+- **Estados máximos**: 25.000 eventos por execução
+- **Taxa de execução**: 2.000 por segundo
+
+### Express Workflows
+- **Payload máximo**: 256 KB
+- **Execução máxima**: 5 minutos
+- **Taxa de execução**: 100.000+ por segundo
+- **Histórico**: Limitado (CloudWatch Logs)
+
+## 🔧 Dicas de Debugging
+
+### 1. Use Pass States para Debug
+```json
+{
+  "DebugInput": {
+    "Type": "Pass",
+    "Parameters": {
+      "debug": "Current state input",
+      "input.$": "$",
+      "context.$": "$$"
+    },
+    "Next": "ActualProcessing"
+  }
+}
+```
+
+### 2. Logging Estruturado
+```json
+{
+  "LogState": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:Logger",
+    "Parameters": {
+      "level": "INFO",
+      "message": "Processing item",
+      "data.$": "$",
+      "executionId.$": "$$.Execution.Id"
+    },
+    "ResultPath": null,
+    "Next": "ContinueWorkflow"
+  }
+}
+```
+
+## 🎓 Próximos Passos
+
+1. **Explore integrações**: Aprenda sobre SDK integrações
+2. **Pratique padrões**: Implemente padrões comuns
+3. **Otimize custos**: Entenda o modelo de pricing
+4. **Monitor**: Configure alertas e dashboards
+5. **Teste**: Use Step Functions Local para desenvolvimento
+
+---
+
+Este documento cobre os conceitos fundamentais. Para casos específicos, consulte os exemplos práticos na pasta `/examples/`.

@@ -1,0 +1,539 @@
+v2
+
+{
+  "Comment": "E-commerce Order Processing Workflow - Exemplo Completo",
+  "StartAt": "ValidateOrder",
+  "States": {
+    "ValidateOrder": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ValidateOrder",
+      "Parameters": {
+        "order.$": "$.order",
+        "customer.$": "$.customer",
+        "timestamp.$": "$$.State.EnteredTime"
+      },
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["ValidationError"],
+          "Next": "OrderValidationFailed",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "SystemError",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "CheckInventory"
+    },
+
+    "CheckInventory": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "Inventory",
+        "Key": {
+          "ProductId": {
+            "S.$": "$.order.productId"
+          }
+        }
+      },
+      "ResultPath": "$.inventory",
+      "Next": "HasInventory?"
+    },
+
+    "HasInventory?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.inventory.Item.Quantity.N",
+              "NumericGreaterThanEquals": 1
+            }
+          ],
+          "Next": "ProcessPayment"
+        }
+      ],
+      "Default": "OutOfStock"
+    },
+
+    "ProcessPayment": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "AuthorizePayment",
+          "States": {
+            "AuthorizePayment": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:us-east-1:123456789012:function:AuthorizePayment",
+              "Parameters": {
+                "paymentMethod.$": "$.order.paymentMethod",
+                "amount.$": "$.order.totalAmount",
+                "currency.$": "$.order.currency"
+              },
+              "TimeoutSeconds": 45,
+              "Retry": [
+                {
+                  "ErrorEquals": ["PaymentServiceException"],
+                  "IntervalSeconds": 3,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "ReserveInventory",
+          "States": {
+            "ReserveInventory": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "Inventory",
+                "Key": {
+                  "ProductId": {
+                    "S.$": "$.order.productId"
+                  }
+                },
+                "UpdateExpression": "SET ReservedQuantity = ReservedQuantity + :qty, UpdatedAt = :timestamp",
+                "ExpressionAttributeValues": {
+                  ":qty": {
+                    "N.$": "$.order.quantity"
+                  },
+                  ":timestamp": {
+                    "S.$": "$.State.EnteredTime"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["PaymentDeclined"],
+          "Next": "PaymentDeclined",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PaymentProcessingError",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "ProcessOrder"
+    },
+
+    "ProcessOrder": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "Orders",
+        "Item": {
+          "OrderId": {
+            "S.$": "$.order.orderId"
+          },
+          "CustomerId": {
+            "S.$": "$.customer.customerId"
+          },
+          "ProductId": {
+            "S.$": "$.order.productId"
+          },
+          "Quantity": {
+            "N.$": "$.order.quantity"
+          },
+          "Status": {
+            "S": "PROCESSING"
+          },
+          "PaymentId": {
+            "S.$": "$[0].paymentId"
+          },
+          "CreatedAt": {
+            "S.$": "$.State.EnteredTime"
+          },
+          "TotalAmount": {
+            "N.$": "$.order.totalAmount"
+          }
+        }
+      },
+      "ResultPath": "$.orderRecord",
+      "Next": "NotifyCustomer"
+    },
+
+    "NotifyCustomer": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789012:order-notifications",
+        "Message": {
+          "default": "Seu pedido foi processado com sucesso!",
+          "email": "Olá! Seu pedido foi processado e está sendo preparado para envio.",
+          "sms": "Pedido confirmado! Acompanhe o status no app."
+        },
+        "MessageStructure": "json",
+        "MessageAttributes": {
+          "orderId": {
+            "DataType": "String",
+            "StringValue.$": "$.order.orderId"
+          },
+          "customerId": {
+            "DataType": "String",
+            "StringValue.$": "$.customer.customerId"
+          },
+          "notificationType": {
+            "DataType": "String",
+            "StringValue": "ORDER_CONFIRMATION"
+          }
+        }
+      },
+      "Next": "ScheduleShipping"
+    },
+
+    "ScheduleShipping": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/shipping-queue",
+        "MessageBody": {
+          "orderId.$": "$.order.orderId",
+          "customerId.$": "$.customer.customerId",
+          "shippingAddress.$": "$.customer.shippingAddress",
+          "priority": "standard",
+          "requestedBy": "order-processing-workflow"
+        },
+        "DelaySeconds": 0,
+        "MessageAttributes": {
+          "OrderPriority": {
+            "DataType": "String",
+            "StringValue": "STANDARD"
+          }
+        }
+      },
+      "Next": "WaitForShippingConfirmation"
+    },
+
+    "WaitForShippingConfirmation": {
+      "Type": "Wait",
+      "Seconds": 300,
+      "Next": "CheckShippingStatus"
+    },
+
+    "CheckShippingStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:CheckShippingStatus",
+      "Parameters": {
+        "orderId.$": "$.order.orderId"
+      },
+      "ResultPath": "$.shippingStatus",
+      "Next": "ShippingReady?"
+    },
+
+    "ShippingReady?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.shippingStatus.status",
+          "StringEquals": "READY_TO_SHIP",
+          "Next": "OrderComplete"
+        },
+        {
+          "Variable": "$.shippingStatus.status",
+          "StringEquals": "PENDING",
+          "Next": "WaitForShippingConfirmation"
+        }
+      ],
+      "Default": "ShippingError"
+    },
+
+    "OrderComplete": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "Orders",
+        "Key": {
+          "OrderId": {
+            "S.$": "$.order.orderId"
+          }
+        },
+        "UpdateExpression": "SET #status = :status, CompletedAt = :timestamp, TrackingNumber = :tracking",
+        "ExpressionAttributeNames": {
+          "#status": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "COMPLETED"
+          },
+          ":timestamp": {
+            "S.$": "$.State.EnteredTime"
+          },
+          ":tracking": {
+            "S.$": "$.shippingStatus.trackingNumber"
+          }
+        }
+      },
+      "Next": "SendTrackingInfo"
+    },
+
+    "SendTrackingInfo": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789012:order-notifications",
+        "Message": {
+          "default": "Seu pedido foi enviado!",
+          "email": "Seu pedido está a caminho! Número de rastreamento: {{tracking}}",
+          "sms": "Pedido enviado! Rastreie: {{tracking}}"
+        },
+        "MessageStructure": "json",
+        "MessageAttributes": {
+          "orderId": {
+            "DataType": "String",
+            "StringValue.$": "$.order.orderId"
+          },
+          "trackingNumber": {
+            "DataType": "String",
+            "StringValue.$": "$.shippingStatus.trackingNumber"
+          },
+          "notificationType": {
+            "DataType": "String",
+            "StringValue": "SHIPPING_CONFIRMATION"
+          }
+        }
+      },
+      "End": true
+    },
+
+    "OutOfStock": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "NotifyOutOfStock",
+          "States": {
+            "NotifyOutOfStock": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "arn:aws:sns:us-east-1:123456789012:order-notifications",
+                "Message": {
+                  "default": "Produto fora de estoque",
+                  "email": "Infelizmente o produto que você selecionou está fora de estoque."
+                },
+                "MessageStructure": "json",
+                "MessageAttributes": {
+                  "orderId": {
+                    "DataType": "String",
+                    "StringValue.$": "$.order.orderId"
+                  },
+                  "notificationType": {
+                    "DataType": "String",
+                    "StringValue": "OUT_OF_STOCK"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "AddToWaitlist",
+          "States": {
+            "AddToWaitlist": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:putItem",
+              "Parameters": {
+                "TableName": "Waitlist",
+                "Item": {
+                  "ProductId": {
+                    "S.$": "$.order.productId"
+                  },
+                  "CustomerId": {
+                    "S.$": "$.customer.customerId"
+                  },
+                  "RequestedQuantity": {
+                    "N.$": "$.order.quantity"
+                  },
+                  "AddedAt": {
+                    "S.$": "$.State.EnteredTime"
+                  },
+                  "Status": {
+                    "S": "WAITING"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "End": true
+    },
+
+    "OrderValidationFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789012:order-notifications",
+        "Message": {
+          "default": "Erro na validação do pedido",
+          "email": "Houve um problema com seu pedido. Por favor, verifique os dados e tente novamente."
+        },
+        "MessageStructure": "json",
+        "MessageAttributes": {
+          "error": {
+            "DataType": "String",
+            "StringValue.$": "$.error.Error"
+          },
+          "notificationType": {
+            "DataType": "String",
+            "StringValue": "VALIDATION_ERROR"
+          }
+        }
+      },
+      "Next": "OrderFailed"
+    },
+
+    "PaymentDeclined": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "NotifyPaymentDeclined",
+          "States": {
+            "NotifyPaymentDeclined": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "arn:aws:sns:us-east-1:123456789012:order-notifications",
+                "Message": {
+                  "default": "Pagamento recusado",
+                  "email": "Seu pagamento foi recusado. Tente com outro método de pagamento."
+                },
+                "MessageStructure": "json",
+                "MessageAttributes": {
+                  "orderId": {
+                    "DataType": "String",
+                    "StringValue.$": "$.order.orderId"
+                  },
+                  "notificationType": {
+                    "DataType": "String",
+                    "StringValue": "PAYMENT_DECLINED"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "ReleaseInventory",
+          "States": {
+            "ReleaseInventory": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "Inventory",
+                "Key": {
+                  "ProductId": {
+                    "S.$": "$.order.productId"
+                  }
+                },
+                "UpdateExpression": "SET ReservedQuantity = ReservedQuantity - :qty",
+                "ExpressionAttributeValues": {
+                  ":qty": {
+                    "N.$": "$.order.quantity"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "OrderFailed"
+    },
+
+    "PaymentProcessingError": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:LogError",
+      "Parameters": {
+        "errorType": "PAYMENT_PROCESSING_ERROR",
+        "orderId.$": "$.order.orderId",
+        "error.$": "$.error",
+        "timestamp.$": "$.State.EnteredTime"
+      },
+      "Next": "SystemError"
+    },
+
+    "ShippingError": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:HandleShippingError",
+      "Parameters": {
+        "orderId.$": "$.order.orderId",
+        "shippingStatus.$": "$.shippingStatus",
+        "timestamp.$": "$.State.EnteredTime"
+      },
+      "Next": "SystemError"
+    },
+
+    "SystemError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789012:system-alerts",
+        "Subject": "Sistema Error - Order Processing",
+        "Message": {
+          "orderId.$": "$.order.orderId",
+          "error.$": "$.error",
+          "timestamp.$": "$.State.EnteredTime",
+          "executionArn.$": "$.Execution.Id"
+        }
+      },
+      "Next": "OrderFailed"
+    },
+
+    "OrderFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "FailedOrders",
+        "Item": {
+          "OrderId": {
+            "S.$": "$.order.orderId"
+          },
+          "CustomerId": {
+            "S.$": "$.customer.customerId"
+          },
+          "FailureReason": {
+            "S.$": "$.error.Error"
+          },
+          "FailedAt": {
+            "S.$": "$.State.EnteredTime"
+          },
+          "ExecutionArn": {
+            "S.$": "$.Execution.Id"
+          },
+          "OriginalOrder": {
+            "S.$": "States.JsonToString($.order)"
+          }
+        }
+      },
+      "End": true
+    }
+  }
+}",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.inventory.Item

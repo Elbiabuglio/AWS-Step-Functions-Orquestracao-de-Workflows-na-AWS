@@ -1,0 +1,508 @@
+# 🎯 Boas Práticas - AWS Step Functions
+
+## 🏗️ Design de Workflows
+
+### 1. Princípio da Responsabilidade Única
+Cada estado deve ter uma responsabilidade bem definida e específica.
+
+```json
+// ❌ Evite: Estado que faz muitas coisas
+{
+  "ProcessEverything": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:DoEverything"
+  }
+}
+
+// ✅ Prefira: Estados específicos
+{
+  "ValidateInput": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ValidateInput",
+    "Next": "ProcessData"
+  },
+  "ProcessData": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessData",
+    "Next": "SaveResults"
+  }
+}
+```
+
+### 2. Nomeação Consistente
+Use nomes descritivos e siga uma convenção consistente.
+
+```json
+// ✅ Bons nomes
+{
+  "ValidateUserInput": { ... },
+  "ProcessPayment": { ... },
+  "SendConfirmationEmail": { ... },
+  "UpdateOrderStatus": { ... }
+}
+
+// ❌ Nomes ruins
+{
+  "Step1": { ... },
+  "DoStuff": { ... },
+  "Task": { ... }
+}
+```
+
+### 3. Estrutura Hierárquica
+Organize workflows complexos usando estados aninhados.
+
+```json
+{
+  "ProcessOrder": {
+    "Type": "Parallel",
+    "Branches": [
+      {
+        "StartAt": "ValidatePayment",
+        "States": {
+          "ValidatePayment": { ... },
+          "ProcessPayment": { ... },
+          "ConfirmPayment": { ... }
+        }
+      },
+      {
+        "StartAt": "CheckInventory",
+        "States": {
+          "CheckInventory": { ... },
+          "ReserveItems": { ... },
+          "UpdateInventory": { ... }
+        }
+      }
+    ]
+  }
+}
+```
+
+## 🔄 Gerenciamento de Estado e Dados
+
+### 1. Minimize o Payload
+Passe apenas os dados necessários entre estados.
+
+```json
+// ❌ Evite: Passar dados desnecessários
+{
+  "ProcessUser": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessUser",
+    "InputPath": "$"  // Passa tudo
+  }
+}
+
+// ✅ Prefira: Passar apenas o necessário
+{
+  "ProcessUser": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessUser",
+    "InputPath": "$.user"  // Passa apenas dados do usuário
+  }
+}
+```
+
+### 2. Use ResultPath Estrategicamente
+Preserve dados importantes e adicione resultados sem sobrescrever.
+
+```json
+{
+  "EnrichData": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:EnrichData",
+    "ResultPath": "$.enrichment",  // Adiciona sem sobrescrever
+    "Next": "ProcessEnrichedData"
+  }
+}
+```
+
+### 3. Transformação de Dados
+Use estados Pass para transformações simples.
+
+```json
+{
+  "FormatOutput": {
+    "Type": "Pass",
+    "Parameters": {
+      "statusCode": 200,
+      "body": {
+        "success": true,
+        "data.$": "$.processedData",
+        "timestamp.$": "$$.State.EnteredTime"
+      }
+    },
+    "End": true
+  }
+}
+```
+
+## ⚠️ Tratamento de Erros e Resilência
+
+### 1. Configuração de Retry Apropriada
+Configure retry com backoff exponencial para falhas transitórias.
+
+```json
+{
+  "CallExternalService": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:CallAPI",
+    "Retry": [
+      {
+        "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+        "IntervalSeconds": 2,
+        "MaxAttempts": 6,
+        "BackoffRate": 2.0
+      },
+      {
+        "ErrorEquals": ["States.TaskFailed"],
+        "IntervalSeconds": 1,
+        "MaxAttempts": 3,
+        "BackoffRate": 1.5
+      }
+    ]
+  }
+}
+```
+
+### 2. Tratamento de Erros Específicos
+Trate diferentes tipos de erro de forma apropriada.
+
+```json
+{
+  "ProcessPayment": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessPayment",
+    "Catch": [
+      {
+        "ErrorEquals": ["PaymentDeclined"],
+        "Next": "HandleDeclinedPayment",
+        "ResultPath": "$.error"
+      },
+      {
+        "ErrorEquals": ["InsufficientFunds"],
+        "Next": "NotifyInsufficientFunds",
+        "ResultPath": "$.error"
+      },
+      {
+        "ErrorEquals": ["States.ALL"],
+        "Next": "HandleGenericError",
+        "ResultPath": "$.error"
+      }
+    ]
+  }
+}
+```
+
+### 3. Implementar Circuit Breaker
+Para serviços externos instáveis.
+
+```json
+{
+  "CheckServiceHealth": {
+    "Type": "Choice",
+    "Choices": [
+      {
+        "Variable": "$.serviceHealth.status",
+        "StringEquals": "DOWN",
+        "Next": "ServiceUnavailable"
+      },
+      {
+        "Variable": "$.serviceHealth.errorRate",
+        "NumericGreaterThan": 0.5,
+        "Next": "ServiceDegraded"
+      }
+    ],
+    "Default": "CallService"
+  }
+}
+```
+
+## ⏱️ Timeouts e Performance
+
+### 1. Configure Timeouts Apropriados
+Defina timeouts baseados no SLA esperado.
+
+```json
+{
+  "QuickTask": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:QuickTask",
+    "TimeoutSeconds": 10  // Para tarefas rápidas
+  },
+  "LongRunningTask": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:LongTask",
+    "TimeoutSeconds": 900,  // 15 minutos para tarefas longas
+    "HeartbeatSeconds": 60   // Heartbeat para monitorar progresso
+  }
+}
+```
+
+### 2. Use Paralelização Quando Apropriado
+Execute tarefas independentes em paralelo.
+
+```json
+{
+  "ProcessInParallel": {
+    "Type": "Parallel",
+    "Branches": [
+      {
+        "StartAt": "ProcessImages",
+        "States": { ... }
+      },
+      {
+        "StartAt": "ProcessText",
+        "States": { ... }
+      },
+      {
+        "StartAt": "ProcessMetadata",
+        "States": { ... }
+      }
+    ],
+    "Next": "CombineResults"
+  }
+}
+```
+
+### 3. Otimize Estados Map
+Use MaxConcurrency para controlar paralelismo.
+
+```json
+{
+  "ProcessItems": {
+    "Type": "Map",
+    "ItemsPath": "$.items",
+    "MaxConcurrency": 10,  // Limita para evitar throttling
+    "Iterator": {
+      "StartAt": "ProcessItem",
+      "States": { ... }
+    }
+  }
+}
+```
+
+## 🔐 Segurança
+
+### 1. Princípio do Menor Privilégio
+IAM roles com permissões mínimas necessárias.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:SpecificFunction"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem"
+      ],
+      "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/SpecificTable"
+    }
+  ]
+}
+```
+
+### 2. Criptografia de Dados
+Use KMS para dados sensíveis.
+
+```json
+{
+  "StoreSecureData": {
+    "Type": "Task",
+    "Resource": "arn:aws:states:::dynamodb:putItem",
+    "Parameters": {
+      "TableName": "SecureData",
+      "Item": {
+        "Id": {"S.$": "$.id"},
+        "EncryptedData": {
+          "S.$": "States.StringToJson(States.Base64Encode($.sensitiveData))"
+        }
+      }
+    }
+  }
+}
+```
+
+### 3. Evite Dados Sensíveis em Logs
+Use ResultPath: null para não logar resultados.
+
+```json
+{
+  "ProcessSensitiveData": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:ProcessSensitive",
+    "ResultPath": null,  // Não adiciona resultado ao estado
+    "Next": "NextStep"
+  }
+}
+```
+
+## 💰 Otimização de Custos
+
+### 1. Escolha o Tipo de Workflow Correto
+
+#### Standard Workflows
+- **Quando usar**: Workflows de longa duração, auditoria necessária
+- **Características**: Execução até 1 ano, histórico completo
+
+#### Express Workflows
+- **Quando usar**: Alto volume, baixa latência, execuções curtas
+- **Características**: Execução até 5 minutos, menor custo por execução
+
+### 2. Minimize Transições de Estado
+Combine operações quando possível.
+
+```json
+// ❌ Muitas transições desnecessárias
+{
+  "Step1": { "Type": "Pass", "Next": "Step2" },
+  "Step2": { "Type": "Pass", "Next": "Step3" },
+  "Step3": { "Type": "Pass", "Next": "Step4" }
+}
+
+// ✅ Combine em uma única operação
+{
+  "ProcessData": {
+    "Type": "Pass",
+    "Parameters": {
+      "result": "All processing done in one step"
+    },
+    "Next": "NextMeaningfulStep"
+  }
+}
+```
+
+### 3. Use SDK Integrations
+Evite Lambda functions para operações simples.
+
+```json
+// ❌ Lambda desnecessário
+{
+  "SaveToDynamoDB": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:SaveToDDB"
+  }
+}
+
+// ✅ SDK Integration direto
+{
+  "SaveToDynamoDB": {
+    "Type": "Task",
+    "Resource": "arn:aws:states:::dynamodb:putItem",
+    "Parameters": {
+      "TableName": "MyTable",
+      "Item": {
+        "id": {"S.$": "$.id"}
+      }
+    }
+  }
+}
+```
+
+## 📊 Monitoramento e Observabilidade
+
+### 1. Logging Estruturado
+Implemente logging consistente.
+
+```json
+{
+  "LogWorkflowStart": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:Logger",
+    "Parameters": {
+      "level": "INFO",
+      "event": "WORKFLOW_STARTED",
+      "workflowName": "OrderProcessing",
+      "executionId.$": "$$.Execution.Id",
+      "input.$": "$",
+      "timestamp.$": "$$.State.EnteredTime"
+    },
+    "ResultPath": null,
+    "Next": "StartProcessing"
+  }
+}
+```
+
+### 2. Métricas Customizadas
+Envie métricas para CloudWatch.
+
+```json
+{
+  "RecordMetric": {
+    "Type": "Task",
+    "Resource": "arn:aws:lambda:us-east-1:123456789012:function:RecordMetric",
+    "Parameters": {
+      "MetricName": "OrdersProcessed",
+      "Value": 1,
+      "Unit": "Count",
+      "Dimensions": {
+        "WorkflowName": "OrderProcessing"
+      }
+    },
+    "ResultPath": null,
+    "Next": "ContinueWorkflow"
+  }
+}
+```
+
+### 3. Alertas Proativos
+Configure alertas para falhas.
+
+```json
+{
+  "HandleCriticalError": {
+    "Type": "Task",
+    "Resource": "arn:aws:states:::sns:publish",
+    "Parameters": {
+      "TopicArn": "arn:aws:sns:us-east-1:123456789012:critical-alerts",
+      "Subject": "Critical Workflow Failure",
+      "Message": {
+        "workflowName": "OrderProcessing",
+        "executionId.$": "$$.Execution.Id",
+        "error.$": "$.error",
+        "timestamp.$": "$$.State.EnteredTime"
+      }
+    }
+  }
+}
+```
+
+## 🧪 Testes e Desenvolvimento
+
+### 1. Use Step Functions Local
+Para desenvolvimento e testes locais.
+
+```bash
+# Instalar Step Functions Local
+docker pull amazon/aws-stepfunctions-local
+
+# Executar localmente
+docker run -p 8083:8083 amazon/aws-stepfunctions-local
+```
+
+### 2. Testes Unitários para Estados
+Teste cada estado individualmente.
+
+```javascript
+// Exemplo em Node.js
+const AWS = require('aws-sdk');
+const stepfunctions = new AWS.StepFunctions({
+  endpoint: 'http://localhost:8083'
+});
+
+describe('Workflow Tests', () => {
+  test('should validate input correctly', async () => {
+    const params = {
+      stateMachineArn: 'arn:aws:states:local:123456789:stateMachine:TestWorkflow',
+      input: JSON.stringify({ order: { id: '123' } })
+    };
+    
+    const result = await stepfunctions.startExecution(params).promise();
